@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encrypted Journal & Planner</title>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #121212;
+  color: #fff;
+  padding: 15px;
+}
+input, textarea, button {
+  width: 100%;
+  margin: 5px 0;
+  padding: 10px;
+  background: #1e1e1e;
+  color: white;
+  border: 1px solid #333;
+}
+button { cursor: pointer; }
+.task { display: flex; gap: 10px; }
+.task input { width: auto; }
+hr { border: 1px solid #333; }
+</style>
+</head>
+
+<body>
+
+<h2>🔐 Encrypted Journal & Planner</h2>
+
+<input type="password" id="password" placeholder="Encryption password">
+
+<button onclick="loadData()">Unlock</button>
+
+<hr>
+
+<h3>📅 Journal (Today)</h3>
+<textarea id="journal" rows="6" placeholder="Write your journal..."></textarea>
+<button onclick="saveJournal()">Save Journal</button>
+
+<hr>
+
+<h3>✅ Tasks</h3>
+<input id="taskInput" placeholder="New task">
+<button onclick="addTask()">Add Task</button>
+
+<div id="tasks"></div>
+
+<script>
+// --- Simple AES Encryption ---
+async function getKey(password) {
+  const enc = new TextEncoder();
+  return crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+}
+
+async function deriveKey(keyMaterial) {
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: new TextEncoder().encode("journal-salt"),
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encrypt(text, password) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const keyMaterial = await getKey(password);
+  const key = await deriveKey(keyMaterial);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(text)
+  );
+  return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
+}
+
+async function decrypt(cipher, password) {
+  const obj = JSON.parse(atob(cipher));
+  const keyMaterial = await getKey(password);
+  const key = await deriveKey(keyMaterial);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: new Uint8Array(obj.iv) },
+    key,
+    new Uint8Array(obj.data)
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+// --- App Logic ---
+const today = new Date().toISOString().slice(0,10);
+
+async function loadData() {
+  const pw = password.value;
+  if (!pw) return alert("Enter password");
+
+  try {
+    const j = localStorage.getItem("journal-"+today);
+    if (j) journal.value = await decrypt(j, pw);
+
+    const t = localStorage.getItem("tasks-"+today);
+    if (t) renderTasks(JSON.parse(await decrypt(t, pw)));
+  } catch {
+    alert("Wrong password");
+  }
+}
+
+async function saveJournal() {
+  const pw = password.value;
+  const enc = await encrypt(journal.value, pw);
+  localStorage.setItem("journal-"+today, enc);
+  alert("Saved");
+}
+
+let tasks = [];
+
+function renderTasks(list) {
+  tasks = list;
+  const div = document.getElementById("tasks");
+  div.innerHTML = "";
+  list.forEach((t, i) => {
+    const d = document.createElement("div");
+    d.className = "task";
+    d.innerHTML = `
+      <input type="checkbox" ${t.done?"checked":""}
+        onchange="toggleTask(${i})">
+      <span>${t.text}</span>
+      <button onclick="deleteTask(${i})">X</button>
+    `;
+    div.appendChild(d);
+  });
+}
+
+async function saveTasks() {
+  const pw = password.value;
+  const enc = await encrypt(JSON.stringify(tasks), pw);
+  localStorage.setItem("tasks-"+today, enc);
+}
+
+function addTask() {
+  if (!taskInput.value) return;
+  tasks.push({ text: taskInput.value, done: false });
+  taskInput.value = "";
+  renderTasks(tasks);
+  saveTasks();
+}
+
+function toggleTask(i) {
+  tasks[i].done = !tasks[i].done;
+  saveTasks();
+}
+
+function deleteTask(i) {
+  tasks.splice(i,1);
+  renderTasks(tasks);
+  saveTasks();
+}
+</script>
+
+</body>
+</html>
